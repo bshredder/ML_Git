@@ -1,0 +1,216 @@
+---
+title: "ML Project"
+author: "Bill Schroeder"
+date: "November 8, 2015"
+output: html_document
+---
+
+##1.0 Executive Summary
+
+Our goal is to predict how well a subject performed an excersise based on data recieved from a set of accelerometers the subject wore while performing the excercise. Specifically accelerometers on the belt, forearm, arm, and dumbell for 6 participants. More information on the dataset is available from the website: <http://groupware.les.inf.puc-rio.br/har> (see the section on the Weight Lifting Exercise Dataset). 
+
+In order to predict how the subject performed, we select an ML model, cross validate, calculate the expected out of sample error, and use the ML prediction model to predict 20 different test cases. 
+
+
+##2.0 Data Exploration
+
+###2.1 Examine the data and review metadata 
+
+Metadata is avialble on the website <http://groupware.les.inf.puc-rio.br/har>. Review the size, structure, and quality of the data.
+
+```{r LoadData, cache=TRUE}
+
+# load the training data - https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv
+if(!file.exists("pml-training.csv")){
+  download.file("http://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv",
+                "pml-training.csv")
+}
+rawTrainingData <- read.csv( "pml-training.csv", header=TRUE, sep=",")
+
+
+# Load the test data - https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv
+if(!file.exists("pml-testing.csv")){
+  download.file("http://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv",
+                "pml-testing.csv")
+}
+rawTestData <- read.csv( "pml-testing.csv", header=TRUE, sep=",")
+
+```
+
+###2.2 Examine the amount of test data relative to training data 
+
+Determine what to preprocess and clean. See Apendix for additional data exploration.
+
+```{r ExploreData, , cache=TRUE}
+
+# perform some exploratory data analysis
+dim( rawTrainingData )
+dim( rawTestData )
+
+# calculate how much test data we have
+rawTraindataDim <- dim( rawTrainingData )
+rawTestdataDim <- dim( rawTestData )
+
+# print("Percent of raw training vs raw test data")
+paste(round(( rawTestdataDim[1]/ rawTraindataDim[1])*100,digits=1),"%",sep="")
+
+```
+
+
+##3.0 Tidying and Preprocessing Data
+
+From the exploratory data analysis, we observe that there are multiple attributes with missing values, we suspect that there are multiple poor predictors since they have little or no variance, and that the "X", username, timestamps (1,2,cvtd) are not predictors and create issues in the training algorithms. Therefore impute and clean this data.
+
+
+```{r PreprocessData, , cache=TRUE}
+
+# clean and tidy the data
+
+# seed the random generation for reproducible results
+set.seed(123)
+
+# check for ML required packages
+if("caret" %in% rownames(installed.packages() ) == FALSE){
+  install.packages("caret")
+  install.packages("randomForest")
+}
+library(caret)
+
+# remove the attribute (column) if there is more than 1/2 the values missing
+dropVector <- c()
+for(i in 1:length( rawTrainingData ) ) {
+  if( sum( is.na( rawTrainingData[ ,i] ) )/nrow( rawTrainingData ) > 0.5 ){
+    dropVector <- c(dropVector, i)
+  }
+}
+tidy_trainingData <- rawTrainingData
+tidy_trainingData <- tidy_trainingData[,-dropVector,drop=FALSE] 
+rawTestData <- rawTestData[,-dropVector,drop=FALSE] 
+
+# eliminate the irrelevant data - also getting in the way of model performance
+tidy_trainingData <- tidy_trainingData[, -c(1:5)]
+rawTestData <- rawTestData[ ,  -c(1:5)]
+
+# print("Dimensions of NA cleaned data")
+dim( tidy_trainingData )
+
+# remove predictors that have near zero variance since they do not add predictive value
+nzv_predictors <- nearZeroVar( tidy_trainingData )
+tidy_trainingData <- tidy_trainingData[ , -nzv_predictors]
+rawTestData <- rawTestData[ , -nzv_predictors]
+
+# print("Dimensions of near zero variance cleaned data")
+dim( tidy_trainingData )
+dim( rawTestData )
+
+# print("Percent of attributes of cleaned vs raw data")
+paste(round(( dim(tidy_trainingData)[2]/dim( rawTrainingData)[2] )*100,digits=1),"%",sep="")
+
+```
+
+
+
+##4.0 Cross Validation
+
+In order to generate an ML model we first make a study design decison to divide the initial training set into the recommended 60/40 split. We will use 60% of the training data to train, 40% to test and use the provided testing data to validate the model. (NOTE - this turns out to be redundant because of the OOB technique used in random forest algorithm)
+
+
+```{r CrossValidation, , cache=TRUE}
+
+# partitian the training data set into training and testing sets
+inTrain <- createDataPartition( y=tidy_trainingData$classe, p=0.6, list=FALSE )
+tidy_trainingSubset <- tidy_trainingData[inTrain, ] 
+tidy_testingSubset <- tidy_trainingData[-inTrain, ] 
+dim(tidy_trainingSubset);dim(tidy_testingSubset)
+
+```
+
+
+##5.0 Model Generation
+
+Select random Forests to mitigate the problems of high variance and high bias by averaging to balance between the two extremes. Based on matrix at <http://www.dataschool.io/comparing-supervised-learning-algorithms/>, select the Random Forest (RF) technique.
+
+```{r ModelGeneration, cache=TRUE}
+
+# check for ML required packages
+if("rattle" %in% rownames(installed.packages() ) == FALSE){
+  install.packages("rattle")
+}
+library(rattle)
+
+# select random forest model because of its performance in general predicion to build model
+library(randomForest)
+modelFit <- randomForest( classe~.,data=tidy_trainingSubset, method="class" )
+modelFit
+
+
+```
+
+
+###5.1 Expected out sample error
+
+We calculated the expected out of sample error two differnt ways. We used the cross validation process to split the original training data into a training and test set and then ran our trained model on the test cross validation partition and calculated the error rate. We also used the OOB error rate generated from the random forest model since the algorithm effectively does internal cross validation by reserving or "bagging" a set of the data during training and then calculating the error rate on the reserved data as OOB error. Both techniques came up with similar out of sample error rates; 
+
+**The OOB error is 0.35%**
+
+The estimated error rate using the test samples set aside in the cross-validation step are shown in the output of The confustion matrix. The confusion matrix shows The accuracy as 0.997. The estimated error rate is 1 - accuracy.
+
+**The cross validated out of smaple error is 0.3%**
+
+
+```{r SampleError, echo=FALSE}
+
+# use the model to predict the cross validated testing data
+pred <- predict( modelFit, tidy_testingSubset, type = "class")
+confusionMatrix(pred, tidy_testingSubset$classe)
+
+```
+
+##6.0 Summary and Predictions of Study
+
+The goal of this project was to select a supervised machine learning algorithm that could accurately predict the "classe" variable from a dataset containing information on excercise sessions. In this context "classe" refers to the quality of the excercise that was performed. 
+
+After cleaning and imputing the original dataset we split the training set further into 60/40 train and test sets so that we can cross validate the model. We then researched an appropriate machine learning algorithm and based on the matrix at <http://www.dataschool.io/comparing-supervised-learning-algorithms/>, selected the Random Forest (RF) technique. NOTE - by selecting RF, there is no longer a need to cross validate by manually splitting the data since the RF model uses a bagging technique that effectively does the same thing internally - setting aside aprox. 1/3 of the the data as out of bag samples (OOB) see <http://stat.ethz.ch/education/semesters/ss2012/ams/slides/v10.2.pdf>.
+
+
+###6.1 Prediction algorithm and helper function to write each prediction to a text file  
+
+```{r Predictions}
+# use the model to predict the cross validated testing data
+predictFromTestData <- predict( modelFit, newdata=rawTestData )
+
+
+# 
+pml_write_files = function(x){
+  n = length(x)
+  for(i in 1:n){
+    filename = paste0("problem_id_",i,".txt")
+    write.table(x[i],file=filename,quote=FALSE,row.names=FALSE,col.names=FALSE)
+  }
+}
+
+pml_write_files( predictFromTestData )
+
+```
+
+##7.0 Appendix
+
+```{r}
+
+# look at raw data
+str( rawTrainingData)
+str( rawTestData)
+
+# look at data after cleansing
+summary(tidy_trainingData)
+
+#firstFit <- train( classe~., method="rpart", data=tidy_trainingSubset )
+#print(firstFit$finalModel)
+#plot(firstFit$finalModel, uniform=TRUE, main = "Classifying Main Predictors" )
+#text(firstFit$finalModel, use.n=TRUE, all=TRUE, cex = .8)
+#fancyRpartPlot( firstFit$finalPlot )
+
+# Is the classifier variable normally distributed?
+hist( as.numeric(tidy_trainingData$classe ) )
+
+```
